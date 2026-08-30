@@ -353,6 +353,68 @@ function getSecretSuggestion(type: string, category: string): string {
   return suggestions[type] || `将 ${category} 类密钥移至环境变量或密钥管理器`;
 }
 
+// ==================== Git 历史扫描 ====================
+
+function scanGitHistory(projectDir: string, depth: number = 50): SecretFinding[] {
+  const findings: SecretFinding[] = [];
+  const gitDir = resolve(projectDir, '.git');
+  if (!existsSync(gitDir)) return findings;
+
+  try {
+    const output = execSync(
+      `git log --all --diff-filter=D --name-only --pretty=format:"%H" -${depth} 2>/dev/null || echo ""`,
+      { cwd: projectDir, timeout: 30000, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+    );
+
+    const commits = output.split('\n').filter(Boolean);
+    for (const hash of commits) {
+      if (hash.length < 40) continue; // 不是 commit hash
+      try {
+        const diff = execSync(`git show ${hash} --stat --diff-filter=A 2>/dev/null || echo ""`, {
+          cwd: projectDir, timeout: 10000, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        // 检查提交信息是否包含敏感关键词
+        const msg = execSync(`git log -1 --pretty=%s ${hash} 2>/dev/null || echo ""`, {
+          cwd: projectDir, timeout: 5000, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'],
+        }).trim();
+        if (/password|secret|token|key|credential/i.test(msg)) {
+          findings.push({
+            file: `[git history] commit ${hash.substring(0, 8)}`,
+            line: 0,
+            type: 'Git History - Sensitive Commit Message',
+            confidence: 0.6,
+            preview: msg.substring(0, 60),
+            suggestion: '提交信息包含敏感关键词，建议审查是否泄露了密钥',
+          });
+        }
+      } catch { /* skip */ }
+    }
+  } catch { /* git not available */ }
+
+  // 检查 git 中的已删除文件
+  try {
+    const deletedFiles = execSync(
+      `git log --all --diff-filter=D --name-only --pretty=format:"" 2>/dev/null | sort -u | head -100`,
+      { cwd: projectDir, timeout: 30000, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+    ).split('\n').filter(Boolean);
+
+    for (const file of deletedFiles) {
+      if (/\.env|secret|\.pem|\.key|\.p12|credentials/i.test(file)) {
+        findings.push({
+          file: `[git history] deleted file`,
+          line: 0,
+          type: 'Git History - Deleted Sensitive File',
+          confidence: 0.7,
+          preview: file,
+          suggestion: `文件 "${file}" 曾存在于 Git 历史中，敏感文件应从所有历史记录中清除`,
+        });
+      }
+    }
+  } catch { /* ignore */ }
+
+  return findings;
+}
+
 // ==================== 许可证检查 ====================
 
 const RESTRICTED_LICENSES = [
@@ -564,7 +626,10 @@ export function apply(ctx: any, config: Config) {
       }
 
       if ((scanType === 'all' || scanType === 'secrets') && config.scanSecrets) {
-        secrets = scanSecrets(projectDir, config);
+        secrets = [
+          ...scanSecrets(projectDir, config),
+          ...scanGitHistory(projectDir),
+        ];
       }
 
       if ((scanType === 'all' || scanType === 'licenses') && config.checkLicenses) {
