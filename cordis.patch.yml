@@ -1,0 +1,12 @@
+# dsh-security-audit bundle layer: inserts the host tool plugin into a profile's
+# layer stack. Install with:
+#   npx -y @deepseek-ai/dsh plugin --profile web add @qingshanjiluo/dsh-security-audit
+- insert:
+    - id: security-audit
+      name: '@qingshanjiluo/dsh-security-audit'
+      config:
+        maxBytes: 262144
+        maxFindings: 200
+        disabledRules: []
+        extraRiskyPackages: []
+        includeDevDependencies: false
