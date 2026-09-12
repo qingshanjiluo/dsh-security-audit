@@ -1,5 +1,0 @@
-- insert:
-    - id: security-audit
-      name: dsh-security-audit
-      config:
-        enabled: true
